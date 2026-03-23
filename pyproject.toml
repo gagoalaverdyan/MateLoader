@@ -1,0 +1,53 @@
+[build-system]
+requires = ["hatchling>=1.26"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mateloader"
+version = "0.1.0"
+description = "MateLoader: a desktop app and CLI for downloading supported Yandex Books content."
+readme = "README.md"
+requires-python = ">=3.10"
+keywords = ["yandex-books", "yandex", "cli", "qt", "downloader"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Intended Audience :: End Users/Desktop",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Multimedia",
+  "Topic :: Utilities",
+]
+dependencies = [
+  "beautifulsoup4",
+  "ebooklib",
+  "httpx[http2]",
+  "keyring",
+  "pillow",
+  "PySide6",
+  "pywebview",
+  "pywebview[qt]; sys_platform == 'linux' or sys_platform == 'darwin'",
+  "reportlab",
+]
+
+[project.scripts]
+mateloader = "mateloader.cli:main"
+
+[project.gui-scripts]
+mateloader-gui = "mateloader.gui:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mateloader"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "/README.md",
+  "/requirements-cli.txt",
+  "/scripts",
+  "/src",
+]

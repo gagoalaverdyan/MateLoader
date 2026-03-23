@@ -1,0 +1,7 @@
+beautifulsoup4
+ebooklib
+httpx[http2]
+keyring
+pillow
+pywebview
+reportlab
