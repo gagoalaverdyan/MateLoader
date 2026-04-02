@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mateloader"
-version = "0.1.0"
+version = "0.2"
 description = "MateLoader: a desktop app and CLI for downloading supported Yandex Books content."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -29,10 +29,22 @@ dependencies = [
   "httpx[http2]",
   "keyring",
   "pillow",
+  "reportlab",
+]
+
+[project.optional-dependencies]
+auth = [
+  "pywebview",
+  "pywebview[qt]; sys_platform == 'linux' or sys_platform == 'darwin'",
+]
+gui = [
   "PySide6",
   "pywebview",
   "pywebview[qt]; sys_platform == 'linux' or sys_platform == 'darwin'",
-  "reportlab",
+]
+dev = [
+  "mypy",
+  "ruff",
 ]
 
 [project.scripts]
@@ -50,4 +62,19 @@ include = [
   "/requirements-cli.txt",
   "/scripts",
   "/src",
+  "/tests",
 ]
+
+[tool.ruff]
+line-length = 88
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B"]
+
+[tool.mypy]
+python_version = "3.10"
+warn_unused_ignores = true
+warn_redundant_casts = true
+warn_unused_configs = true
+disallow_untyped_defs = false

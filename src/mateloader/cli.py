@@ -3,9 +3,9 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from .auth import AuthError, get_auth_token, save_auth_token
+from .auth import AuthError, authenticate_user
 from .constants import DOWNLOAD_COMMANDS
-from .downloader import DownloaderError, run_download
+from .downloader import DEFAULT_OUTPUT_ROOT, DownloaderError, run_download
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -34,7 +34,7 @@ def build_parser() -> argparse.ArgumentParser:
         command_parser.add_argument(
             "--output-dir",
             type=Path,
-            default=Path("mybooks"),
+            default=DEFAULT_OUTPUT_ROOT,
             help="Directory where downloaded files will be written.",
         )
         command_parser.add_argument(
@@ -53,9 +53,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _run_auth_command(show_token: bool) -> int:
-    token = get_auth_token()
-    location = save_auth_token(token)
-    print(f"Saved token to {location}")
+    token = authenticate_user()
+    print("Saved token to system keyring")
     if show_token:
         print(token)
     return 0
@@ -92,7 +91,7 @@ def legacy_main(argv: list[str] | None = None) -> int:
     parser.add_argument("command", choices=DOWNLOAD_COMMANDS)
     parser.add_argument("uuid")
     parser.add_argument("--max_bitrate", action="store_true")
-    parser.add_argument("--output-dir", type=Path, default=Path("mybooks"))
+    parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_ROOT)
     parser.add_argument("--auth-token", default=None)
     args = parser.parse_args(argv)
 

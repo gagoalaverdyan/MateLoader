@@ -49,12 +49,16 @@ def legacy_token_paths() -> tuple[Path, ...]:
     return (legacy_token_path(), legacy_config_token_path())
 
 
-def read_saved_token() -> str | None:
-    env_token = os.environ.get("MATELOADER_AUTH_TOKEN", "").strip()
-    if env_token:
-        return env_token
+def _read_env_token() -> str | None:
+    for variable_name in ("MATELOADER_AUTH_TOKEN", "BOOKMATE_AUTH_TOKEN"):
+        token = os.environ.get(variable_name, "").strip()
+        if token:
+            return token
+    return None
 
-    env_token = os.environ.get("BOOKMATE_AUTH_TOKEN", "").strip()
+
+def read_saved_token() -> str | None:
+    env_token = _read_env_token()
     if env_token:
         return env_token
 
@@ -108,48 +112,83 @@ def migrate_legacy_token() -> bool:
     return False
 
 
-def run_auth_webview() -> str:
-    import webview
+def get_saved_auth_token() -> str | None:
+    migrate_legacy_token()
+    return read_saved_token()
 
-    def on_loaded(window):
-        parsed = urllib.parse.urlparse(window.get_current_url())
-        if "yx4483e97bab6e486a9822973109a14d05.oauth.yandex.ru" not in parsed.netloc:
-            return
+
+def require_auth_token() -> str:
+    token = get_saved_auth_token()
+    if token:
+        return token
+    raise AuthError(
+        "No auth token is available. Run `mateloader auth`, use the GUI Authenticate button, "
+        "or set MATELOADER_AUTH_TOKEN."
+    )
+
+
+def run_auth_webview() -> str:
+    try:
+        import webview
+    except ImportError as exc:
+        raise AuthError(
+            "Interactive authentication requires the optional webview dependency. "
+            "Install `mateloader[auth]` or set MATELOADER_AUTH_TOKEN manually."
+        ) from exc
+
+    auth_token: str | None = None
+
+    def read_js_value(expression: str) -> str:
+        try:
+            value = window.evaluate_js(expression)
+        except Exception:  # pragma: no cover - depends on webview backend
+            return ""
+        if isinstance(value, str):
+            return value
+        return ""
+
+    def extract_token_from_url(raw_url: str) -> str | None:
+        if not raw_url:
+            return None
+        parsed = urllib.parse.urlparse(raw_url)
         fragment = urllib.parse.parse_qs(parsed.fragment)
         tokens = fragment.get("access_token")
         if not tokens:
+            return None
+        return tokens[0]
+
+    def on_loaded(*_args):
+        nonlocal auth_token
+
+        current_url = ""
+        try:
+            current_url = window.get_current_url() or ""
+        except Exception:  # pragma: no cover - depends on webview backend
+            pass
+
+        href = read_js_value("window.location.href")
+        hash_value = read_js_value("window.location.hash")
+
+        auth_token = (
+            extract_token_from_url(current_url)
+            or extract_token_from_url(href)
+            or extract_token_from_url(f"https://dummy.invalid/{hash_value}")
+        )
+        if not auth_token:
             return
-        window.auth_token = tokens[0]
+
         window.destroy()
 
     window = webview.create_window("Yandex Login", OAUTH_URL)
     window.events.loaded += on_loaded
-    window.auth_token = None
     webview.start()
 
-    if not window.auth_token:
+    if not auth_token:
         raise AuthError("Authentication was cancelled before a token was captured.")
-    return window.auth_token
+    return auth_token
 
 
-def get_auth_token(
-    *,
-    allow_webview: bool = True,
-) -> str:
-    migrated = migrate_legacy_token()
-    saved_token = read_saved_token()
-    if saved_token:
-        return saved_token
-    if migrated:
-        saved_token = read_saved_token()
-        if saved_token:
-            return saved_token
-
-    if not allow_webview:
-        raise AuthError(
-            "No auth token is available. Run `mateloader auth` first."
-        )
-
+def authenticate_user() -> str:
     token = run_auth_webview()
     save_auth_token(token)
     return token

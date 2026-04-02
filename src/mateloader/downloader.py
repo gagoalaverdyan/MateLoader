@@ -1,19 +1,28 @@
 from __future__ import annotations
 
-import asyncio
 import json
 import re
-import shutil
+import tempfile
+import time
 import warnings
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
 
-from .auth import get_auth_token
+from .auth import require_auth_token
 from .constants import DOWNLOAD_COMMANDS, RESOURCE_URLS, build_headers
 
+if TYPE_CHECKING:
+    import httpx
+
 StatusCallback = Callable[[str], None]
+
+DEFAULT_OUTPUT_ROOT = Path("mybooks")
+MAX_ATTEMPTS = 3
+RETRY_DELAY_SECONDS = 2
+RETRIABLE_STATUS_CODES = {408, 425, 429, 500, 502, 503, 504}
+IMAGE_SUFFIXES = {".jpeg", ".jpg", ".png"}
 
 
 class DownloaderError(RuntimeError):
@@ -28,7 +37,8 @@ def emit_status(message: str, callback: StatusCallback | None = None) -> None:
 
 
 def sanitize_filename(filename: str) -> str:
-    return re.sub(r'[\\/:*?"<>|]', "", filename).strip()
+    sanitized = re.sub(r'[\\/:*?"<>|]', "", filename).strip().rstrip(".")
+    return sanitized or "untitled"
 
 
 def create_pdf_from_images(
@@ -44,13 +54,15 @@ def create_pdf_from_images(
     width, height = letter
 
     images = sorted(
-        path for path in images_folder.iterdir() if path.suffix.lower() == ".jpeg"
+        path for path in images_folder.iterdir() if path.suffix.lower() in IMAGE_SUFFIXES
     )
+    if not images:
+        raise DownloaderError("No comicbook images were found in the downloaded archive.")
+
     for image_path in images:
         with Image.open(image_path):
             pdf.drawImage(str(image_path), 0, 0, width, height)
             pdf.showPage()
-        image_path.unlink()
 
     pdf.save()
     emit_status(f"Saved {output_pdf}", progress_callback)
@@ -89,104 +101,159 @@ def epub_to_fb2(
 @dataclass(slots=True)
 class Downloader:
     auth_token: str
-    output_root: Path | str = Path("mybooks")
+    output_root: Path | str = DEFAULT_OUTPUT_ROOT
     progress_callback: StatusCallback | None = None
     headers: dict[str, str] = field(init=False)
+    _client: httpx.Client | None = field(init=False, default=None, repr=False)
 
     def __post_init__(self) -> None:
         self.output_root = Path(self.output_root).expanduser()
         self.headers = build_headers(self.auth_token)
 
+    def close(self) -> None:
+        if self._client is not None:
+            self._client.close()
+            self._client = None
+
     def emit(self, message: str) -> None:
         emit_status(message, self.progress_callback)
 
-    def _run(self, coroutine):
-        return asyncio.run(coroutine)
+    def _httpx(self):
+        try:
+            import httpx
+        except ImportError as exc:  # pragma: no cover - dependency issue
+            raise DownloaderError(
+                "The httpx dependency is required to download content."
+            ) from exc
+        return httpx
 
-    async def _download_file(self, url: str, file_path: Path) -> None:
-        import httpx
+    def _get_client(self):
+        if self._client is None:
+            httpx = self._httpx()
+            timeout = httpx.Timeout(connect=10.0, read=120.0, write=120.0, pool=30.0)
+            self._client = httpx.Client(
+                http2=True,
+                follow_redirects=True,
+                timeout=timeout,
+            )
+        return self._client
 
-        attempts = 0
-        while attempts < 3:
+    def _request(self, url: str, *, download_label: str) -> httpx.Response:
+        httpx = self._httpx()
+        client = self._get_client()
+        last_error: Exception | None = None
+
+        for attempt in range(1, MAX_ATTEMPTS + 1):
             try:
-                async with httpx.AsyncClient(http2=True, verify=False) as client:
-                    response = await client.get(url, headers=self.headers, timeout=None)
-                    if response.status_code == 200:
-                        file_path.parent.mkdir(parents=True, exist_ok=True)
-                        file_path.write_bytes(response.content)
+                response = client.get(url, headers=self.headers)
+                if response.status_code in RETRIABLE_STATUS_CODES:
+                    last_error = DownloaderError(
+                        f"{download_label} returned {response.status_code}"
+                    )
+                else:
+                    response.raise_for_status()
+                    return response
+            except httpx.HTTPError as exc:
+                last_error = exc
+
+            if attempt < MAX_ATTEMPTS:
+                self.emit(
+                    f"{download_label} failed on attempt {attempt}/{MAX_ATTEMPTS}; retrying..."
+                )
+                time.sleep(RETRY_DELAY_SECONDS)
+
+        raise DownloaderError(
+            f"{download_label} failed after {MAX_ATTEMPTS} attempts: {last_error}"
+        ) from last_error
+
+    def _request_json(self, url: str, *, download_label: str) -> dict:
+        response = self._request(url, download_label=download_label)
+        try:
+            payload = response.json()
+        except json.JSONDecodeError as exc:
+            raise DownloaderError(f"{download_label} returned invalid JSON.") from exc
+        if not isinstance(payload, dict):
+            raise DownloaderError(f"{download_label} returned an unexpected response.")
+        return payload
+
+    def _download_file(self, url: str, file_path: Path) -> None:
+        httpx = self._httpx()
+        client = self._get_client()
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = file_path.parent / f"{file_path.name}.part"
+        last_error: Exception | None = None
+
+        for attempt in range(1, MAX_ATTEMPTS + 1):
+            try:
+                with client.stream("GET", url, headers=self.headers) as response:
+                    if response.status_code in RETRIABLE_STATUS_CODES:
+                        last_error = DownloaderError(
+                            f"Downloading {file_path.name} returned {response.status_code}"
+                        )
+                    else:
+                        response.raise_for_status()
+                        with temp_path.open("wb") as handle:
+                            for chunk in response.iter_bytes():
+                                handle.write(chunk)
+                        temp_path.replace(file_path)
                         self.emit(f"Saved {file_path}")
                         return
-
-                    if response.is_redirect and response.next_request is not None:
-                        redirected = await client.get(
-                            response.next_request.url,
-                            headers=self.headers,
-                            timeout=None,
-                        )
-                        if redirected.status_code == 200:
-                            file_path.parent.mkdir(parents=True, exist_ok=True)
-                            file_path.write_bytes(redirected.content)
-                            self.emit(f"Saved {file_path}")
-                            return
-
-                    self.emit(
-                        f"Failed to download file. Status code: {response.status_code}"
-                    )
             except httpx.HTTPError as exc:
-                self.emit(f"Failed to download file. {exc}")
+                last_error = exc
+            finally:
+                temp_path.unlink(missing_ok=True)
 
-            attempts += 1
-            if attempts == 3:
-                raise DownloaderError(
-                    "Failed to download the file. Check the ID or try again later."
+            if attempt < MAX_ATTEMPTS:
+                self.emit(
+                    f"Downloading {file_path.name} failed on attempt "
+                    f"{attempt}/{MAX_ATTEMPTS}; retrying..."
                 )
-            await asyncio.sleep(5)
+                time.sleep(RETRY_DELAY_SECONDS)
 
-    async def _send_request(self, url: str):
-        import httpx
+        raise DownloaderError(
+            f"Failed to download {file_path.name} after {MAX_ATTEMPTS} attempts: {last_error}"
+        ) from last_error
 
-        attempts = 0
-        while attempts < 3:
-            try:
-                async with httpx.AsyncClient() as client:
-                    response = await client.get(url, headers=self.headers, timeout=None)
-                    if response.status_code == 200:
-                        return response
-                    self.emit(
-                        f"Failed to send request. Status code: {response.status_code}"
-                    )
-            except httpx.HTTPError as exc:
-                self.emit(f"Failed to send request. {exc}")
-
-            attempts += 1
-            if attempts == 3:
-                raise DownloaderError(
-                    "Failed to fetch data. Check the ID or try again later."
-                )
-            await asyncio.sleep(5)
-
-        raise DownloaderError("Request failed unexpectedly.")
-
-    def _base_path(self, resource_type: str, title: str, series: str = "") -> Path:
+    def _base_path(
+        self,
+        resource_type: str,
+        title: str,
+        collection: tuple[str, ...] = (),
+    ) -> Path:
         clean_title = sanitize_filename(title)
-        category = "series" if series else resource_type
+        category = "series" if collection else resource_type
         base_dir = self.output_root / category
-        if series:
-            base_dir = base_dir / Path(series)
+        for segment in collection:
+            base_dir = base_dir / sanitize_filename(segment)
         resource_dir = base_dir / clean_title
         resource_dir.mkdir(parents=True, exist_ok=True)
         return resource_dir / clean_title
 
-    def _get_resource_info(self, resource_type: str, uuid: str, series: str = "") -> Path:
+    def _get_resource_info(
+        self,
+        resource_type: str,
+        uuid: str,
+        collection: tuple[str, ...] = (),
+    ) -> Path:
         info_url = RESOURCE_URLS[resource_type]["info_url"].format(uuid=uuid)
-        info = self._run(self._send_request(info_url)).json()
+        info = self._request_json(
+            info_url,
+            download_label=f"Fetching metadata for {resource_type} {uuid}",
+        )
         resource = info.get(resource_type)
-        if not resource:
+        if not isinstance(resource, dict):
             raise DownloaderError(f"Failed to fetch metadata for {resource_type} {uuid}")
 
-        cover_url = resource["cover"]["large"]
-        base_path = self._base_path(resource_type, resource["title"], series)
-        self._run(self._download_file(cover_url, base_path.with_suffix(".jpeg")))
+        cover = resource.get("cover")
+        if not isinstance(cover, dict) or not cover.get("large"):
+            raise DownloaderError(f"{resource_type} {uuid} is missing cover metadata.")
+
+        title = resource.get("title")
+        if not isinstance(title, str) or not title.strip():
+            raise DownloaderError(f"{resource_type} {uuid} is missing a title.")
+
+        base_path = self._base_path(resource_type, title, collection)
+        self._download_file(str(cover["large"]), base_path.with_suffix(".jpeg"))
         base_path.with_suffix(".json").write_text(
             json.dumps(info, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
@@ -196,27 +263,43 @@ class Downloader:
 
     def _get_resource_json(self, resource_type: str, uuid: str) -> dict:
         content_url = RESOURCE_URLS[resource_type]["content_url"].format(uuid=uuid)
-        return self._run(self._send_request(content_url)).json()
+        return self._request_json(
+            content_url,
+            download_label=f"Fetching content for {resource_type} {uuid}",
+        )
+
+    def _safe_extract_archive(self, archive_path: Path, destination: Path) -> None:
+        destination.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(archive_path, "r") as archive:
+            for member in archive.infolist():
+                extracted_path = destination / member.filename
+                resolved_destination = destination.resolve()
+                resolved_target = extracted_path.resolve()
+                if resolved_destination not in resolved_target.parents and (
+                    resolved_target != resolved_destination
+                ):
+                    raise DownloaderError(
+                        f"Archive member {member.filename!r} would escape the target directory."
+                    )
+            archive.extractall(destination)
 
     def download_book(
         self,
         uuid: str,
         *,
-        series: str = "",
-        serial_path: Path | str | None = None,
+        collection: tuple[str, ...] = (),
+        base_path: Path | None = None,
     ) -> None:
-        base_path = Path(serial_path) if serial_path is not None else self._get_resource_info(
-            "book", uuid, series
+        target_base_path = (
+            base_path if base_path is not None else self._get_resource_info("book", uuid, collection)
         )
-        self._run(
-            self._download_file(
-                RESOURCE_URLS["book"]["content_url"].format(uuid=uuid),
-                base_path.with_suffix(".epub"),
-            )
+        self._download_file(
+            RESOURCE_URLS["book"]["content_url"].format(uuid=uuid),
+            target_base_path.with_suffix(".epub"),
         )
         epub_to_fb2(
-            base_path.with_suffix(".epub"),
-            base_path.with_suffix(".fb2"),
+            target_base_path.with_suffix(".epub"),
+            target_base_path.with_suffix(".fb2"),
             self.progress_callback,
         )
 
@@ -224,10 +307,10 @@ class Downloader:
         self,
         uuid: str,
         *,
-        series: str = "",
+        collection: tuple[str, ...] = (),
         max_bitrate: bool = False,
     ) -> None:
-        base_path = self._get_resource_info("audiobook", uuid, series)
+        base_path = self._get_resource_info("audiobook", uuid, collection)
         response = self._get_resource_json("audiobook", uuid)
         bitrate_key = "max_bit_rate" if max_bitrate else "min_bit_rate"
 
@@ -237,28 +320,35 @@ class Downloader:
             if destination.exists():
                 continue
             download_url = track["offline"][bitrate_key]["url"].replace(".m3u8", ".m4a")
-            self._run(self._download_file(download_url, destination))
+            self._download_file(download_url, destination)
 
-    def download_comicbook(self, uuid: str, *, series: str = "") -> None:
-        base_path = self._get_resource_info("comicbook", uuid, series)
+    def download_comicbook(
+        self,
+        uuid: str,
+        *,
+        collection: tuple[str, ...] = (),
+    ) -> None:
+        base_path = self._get_resource_info("comicbook", uuid, collection)
         response = self._get_resource_json("comicbook", uuid)
         archive_path = base_path.with_suffix(".cbr")
-        self._run(self._download_file(response["uris"]["zip"], archive_path))
-        with zipfile.ZipFile(archive_path, "r") as archive:
-            archive.extractall(base_path.parent)
+        self._download_file(response["uris"]["zip"], archive_path)
 
-        preview_dir = base_path.parent / "preview"
-        if preview_dir.exists():
-            shutil.rmtree(preview_dir)
+        with tempfile.TemporaryDirectory(prefix="mateloader-comic-") as temp_dir:
+            extract_dir = Path(temp_dir)
+            self._safe_extract_archive(archive_path, extract_dir)
+            create_pdf_from_images(
+                extract_dir,
+                base_path.with_suffix(".pdf"),
+                self.progress_callback,
+            )
 
-        create_pdf_from_images(
-            base_path.parent,
-            base_path.with_suffix(".pdf"),
-            self.progress_callback,
-        )
-
-    def download_serial(self, uuid: str, *, series: str = "") -> None:
-        base_path = self._get_resource_info("book", uuid, series)
+    def download_serial(
+        self,
+        uuid: str,
+        *,
+        collection: tuple[str, ...] = (),
+    ) -> None:
+        base_path = self._get_resource_info("book", uuid, collection)
         response = self._get_resource_json("serial", uuid)
         for index, episode in enumerate(response.get("episodes", []), start=1):
             episode_title = sanitize_filename(episode["title"])
@@ -267,23 +357,25 @@ class Downloader:
             episode_dir.mkdir(parents=True, exist_ok=True)
             self.download_book(
                 episode["uuid"],
-                serial_path=episode_dir / episode_name,
+                base_path=episode_dir / episode_name,
             )
 
-    def download_series(self, uuid: str, *, series: str = "") -> None:
-        base_path = self._get_resource_info("series", uuid, series)
+    def download_series(
+        self,
+        uuid: str,
+        *,
+        collection: tuple[str, ...] = (),
+    ) -> None:
+        base_path = self._get_resource_info("series", uuid, collection)
         response = self._get_resource_json("series", uuid)
         series_name = base_path.name
-        self.emit(series_name)
-        for index, part in enumerate(response.get("parts", []), start=1):
+        child_collection = (*collection, series_name)
+
+        for part in response.get("parts", []):
             resource_type = part["resource_type"]
             resource_uuid = part["resource"]["uuid"]
             self.emit(f"{resource_type} {resource_uuid}")
-            self.run(
-                resource_type,
-                resource_uuid,
-                series=f"{series_name}/{index}. ",
-            )
+            self.run(resource_type, resource_uuid, collection=child_collection)
 
     def run(
         self,
@@ -291,24 +383,28 @@ class Downloader:
         uuid: str,
         *,
         max_bitrate: bool = False,
-        series: str = "",
+        collection: tuple[str, ...] = (),
     ) -> None:
         if command not in DOWNLOAD_COMMANDS:
             raise DownloaderError(f"Unsupported command: {command}")
 
         if command == "book":
-            self.download_book(uuid, series=series)
+            self.download_book(uuid, collection=collection)
             return
         if command == "audiobook":
-            self.download_audiobook(uuid, series=series, max_bitrate=max_bitrate)
+            self.download_audiobook(
+                uuid,
+                collection=collection,
+                max_bitrate=max_bitrate,
+            )
             return
         if command == "comicbook":
-            self.download_comicbook(uuid, series=series)
+            self.download_comicbook(uuid, collection=collection)
             return
         if command == "serial":
-            self.download_serial(uuid, series=series)
+            self.download_serial(uuid, collection=collection)
             return
-        self.download_series(uuid, series=series)
+        self.download_series(uuid, collection=collection)
 
 
 def run_download(
@@ -317,13 +413,16 @@ def run_download(
     *,
     max_bitrate: bool = False,
     auth_token: str | None = None,
-    output_root: Path | str = Path("mybooks"),
+    output_root: Path | str = DEFAULT_OUTPUT_ROOT,
     progress_callback: StatusCallback | None = None,
 ) -> None:
-    token = auth_token.strip() if auth_token else get_auth_token()
+    token = auth_token.strip() if auth_token else require_auth_token()
     downloader = Downloader(
         auth_token=token,
         output_root=output_root,
         progress_callback=progress_callback,
     )
-    downloader.run(command, uuid, max_bitrate=max_bitrate)
+    try:
+        downloader.run(command, uuid, max_bitrate=max_bitrate)
+    finally:
+        downloader.close()
