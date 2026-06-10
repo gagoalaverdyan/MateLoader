@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=MateLoader
+GenericName=Yandex Books Downloader
+Comment=Download supported Yandex Books content
+Exec=mateloader-gui
+Icon=io.github.gagoalaverdyan.MateLoader
+Terminal=false
+Categories=Utility;Network;GTK;
+Keywords=yandex;books;audiobook;comic;download;ebook;
+StartupNotify=true

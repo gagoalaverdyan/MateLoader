@@ -8,10 +8,16 @@ version = "0.2"
 description = "MateLoader: a desktop app and CLI for downloading supported Yandex Books content."
 readme = "README.md"
 requires-python = ">=3.10"
-keywords = ["yandex-books", "yandex", "cli", "qt", "downloader"]
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE"]
+authors = [
+  { name = "Gago Alaverdyan" },
+]
+keywords = ["yandex-books", "yandex", "cli", "gtk4", "libadwaita", "gnome", "downloader"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Environment :: Console",
+  "Environment :: X11 Applications :: GTK",
   "Intended Audience :: End Users/Desktop",
   "Operating System :: OS Independent",
   "Programming Language :: Python :: 3",
@@ -38,7 +44,10 @@ auth = [
   "pywebview[qt]; sys_platform == 'linux' or sys_platform == 'darwin'",
 ]
 gui = [
-  "PySide6",
+  # The desktop app is built with GTK4 + libadwaita via PyGObject.
+  # GTK 4 and libadwaita themselves are system libraries; see the README for the
+  # platform packages required alongside this Python dependency.
+  "PyGObject>=3.46",
   "pywebview",
   "pywebview[qt]; sys_platform == 'linux' or sys_platform == 'darwin'",
 ]
@@ -46,6 +55,11 @@ dev = [
   "mypy",
   "ruff",
 ]
+
+[project.urls]
+Homepage = "https://github.com/gagoalaverdyan/MateLoader"
+Repository = "https://github.com/gagoalaverdyan/MateLoader"
+Issues = "https://github.com/gagoalaverdyan/MateLoader/issues"
 
 [project.scripts]
 mateloader = "mateloader.cli:main"
@@ -60,6 +74,7 @@ packages = ["src/mateloader"]
 include = [
   "/README.md",
   "/requirements-cli.txt",
+  "/data",
   "/scripts",
   "/src",
   "/tests",

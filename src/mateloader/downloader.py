@@ -17,6 +17,9 @@ if TYPE_CHECKING:
     import httpx
 
 StatusCallback = Callable[[str], None]
+# (current, total, label). ``total`` of 0 means the count is unknown and the UI
+# should fall back to an indeterminate/pulsing indicator.
+ProgressCallback = Callable[[int, int, str], None]
 
 DEFAULT_OUTPUT_ROOT = Path("mybooks")
 MAX_ATTEMPTS = 3
@@ -103,6 +106,7 @@ class Downloader:
     auth_token: str
     output_root: Path | str = DEFAULT_OUTPUT_ROOT
     progress_callback: StatusCallback | None = None
+    on_progress: ProgressCallback | None = None
     headers: dict[str, str] = field(init=False)
     _client: httpx.Client | None = field(init=False, default=None, repr=False)
 
@@ -117,6 +121,19 @@ class Downloader:
 
     def emit(self, message: str) -> None:
         emit_status(message, self.progress_callback)
+
+    def progress(self, current: int, total: int, label: str) -> None:
+        """Report structured progress, if a handler is attached.
+
+        ``total`` of 0 signals an unknown count (indeterminate progress).
+        Never raises: a misbehaving UI callback must not break a download.
+        """
+        if self.on_progress is None:
+            return
+        try:
+            self.on_progress(current, total, label)
+        except Exception:  # pragma: no cover - defensive UI boundary
+            pass
 
     def _httpx(self):
         try:
@@ -290,18 +307,29 @@ class Downloader:
         collection: tuple[str, ...] = (),
         base_path: Path | None = None,
     ) -> None:
+        # Only a top-level book drives the progress bar; when nested inside a
+        # serial or series the parent reports item-level progress instead.
+        steps = base_path is None and not collection
+        if steps:
+            self.progress(0, 3, "Fetching book metadata")
         target_base_path = (
             base_path if base_path is not None else self._get_resource_info("book", uuid, collection)
         )
+        if steps:
+            self.progress(1, 3, "Downloading book")
         self._download_file(
             RESOURCE_URLS["book"]["content_url"].format(uuid=uuid),
             target_base_path.with_suffix(".epub"),
         )
+        if steps:
+            self.progress(2, 3, "Converting to FB2")
         epub_to_fb2(
             target_base_path.with_suffix(".epub"),
             target_base_path.with_suffix(".fb2"),
             self.progress_callback,
         )
+        if steps:
+            self.progress(3, 3, "Book complete")
 
     def download_audiobook(
         self,
@@ -310,17 +338,28 @@ class Downloader:
         collection: tuple[str, ...] = (),
         max_bitrate: bool = False,
     ) -> None:
+        steps = not collection
+        if steps:
+            self.progress(0, 0, "Fetching audiobook metadata")
         base_path = self._get_resource_info("audiobook", uuid, collection)
         response = self._get_resource_json("audiobook", uuid)
         bitrate_key = "max_bit_rate" if max_bitrate else "min_bit_rate"
 
-        for track in response.get("tracks", []):
+        tracks = response.get("tracks", [])
+        total = len(tracks)
+        for index, track in enumerate(tracks, start=1):
+            if steps:
+                self.progress(index - 1, total, f"Track {index} of {total}")
             chapter_name = sanitize_filename(f'Глава_{track["number"] + 1}') + ".m4a"
             destination = base_path.parent / chapter_name
             if destination.exists():
+                if steps:
+                    self.progress(index, total, f"Track {index} of {total} (cached)")
                 continue
             download_url = track["offline"][bitrate_key]["url"].replace(".m3u8", ".m4a")
             self._download_file(download_url, destination)
+            if steps:
+                self.progress(index, total, f"Track {index} of {total}")
 
     def download_comicbook(
         self,
@@ -328,19 +367,28 @@ class Downloader:
         *,
         collection: tuple[str, ...] = (),
     ) -> None:
+        steps = not collection
+        if steps:
+            self.progress(0, 3, "Fetching comicbook metadata")
         base_path = self._get_resource_info("comicbook", uuid, collection)
         response = self._get_resource_json("comicbook", uuid)
         archive_path = base_path.with_suffix(".cbr")
+        if steps:
+            self.progress(1, 3, "Downloading comicbook archive")
         self._download_file(response["uris"]["zip"], archive_path)
 
         with tempfile.TemporaryDirectory(prefix="mateloader-comic-") as temp_dir:
             extract_dir = Path(temp_dir)
             self._safe_extract_archive(archive_path, extract_dir)
+            if steps:
+                self.progress(2, 3, "Rendering PDF")
             create_pdf_from_images(
                 extract_dir,
                 base_path.with_suffix(".pdf"),
                 self.progress_callback,
             )
+        if steps:
+            self.progress(3, 3, "Comicbook complete")
 
     def download_serial(
         self,
@@ -348,9 +396,16 @@ class Downloader:
         *,
         collection: tuple[str, ...] = (),
     ) -> None:
+        steps = not collection
+        if steps:
+            self.progress(0, 0, "Fetching serial metadata")
         base_path = self._get_resource_info("book", uuid, collection)
         response = self._get_resource_json("serial", uuid)
-        for index, episode in enumerate(response.get("episodes", []), start=1):
+        episodes = response.get("episodes", [])
+        total = len(episodes)
+        for index, episode in enumerate(episodes, start=1):
+            if steps:
+                self.progress(index - 1, total, f"Episode {index} of {total}")
             episode_title = sanitize_filename(episode["title"])
             episode_name = f"{index}. {episode_title}"
             episode_dir = base_path.parent / episode_name
@@ -359,6 +414,8 @@ class Downloader:
                 episode["uuid"],
                 base_path=episode_dir / episode_name,
             )
+            if steps:
+                self.progress(index, total, f"Episode {index} of {total}")
 
     def download_series(
         self,
@@ -366,16 +423,25 @@ class Downloader:
         *,
         collection: tuple[str, ...] = (),
     ) -> None:
+        steps = not collection
+        if steps:
+            self.progress(0, 0, "Fetching series metadata")
         base_path = self._get_resource_info("series", uuid, collection)
         response = self._get_resource_json("series", uuid)
         series_name = base_path.name
         child_collection = (*collection, series_name)
 
-        for part in response.get("parts", []):
+        parts = response.get("parts", [])
+        total = len(parts)
+        for index, part in enumerate(parts, start=1):
             resource_type = part["resource_type"]
             resource_uuid = part["resource"]["uuid"]
+            if steps:
+                self.progress(index - 1, total, f"Part {index} of {total} ({resource_type})")
             self.emit(f"{resource_type} {resource_uuid}")
             self.run(resource_type, resource_uuid, collection=child_collection)
+            if steps:
+                self.progress(index, total, f"Part {index} of {total}")
 
     def run(
         self,
@@ -415,12 +481,14 @@ def run_download(
     auth_token: str | None = None,
     output_root: Path | str = DEFAULT_OUTPUT_ROOT,
     progress_callback: StatusCallback | None = None,
+    on_progress: ProgressCallback | None = None,
 ) -> None:
     token = auth_token.strip() if auth_token else require_auth_token()
     downloader = Downloader(
         auth_token=token,
         output_root=output_root,
         progress_callback=progress_callback,
+        on_progress=on_progress,
     )
     try:
         downloader.run(command, uuid, max_bitrate=max_bitrate)

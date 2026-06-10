@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.gagoalaverdyan.MateLoader</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+
+  <name>MateLoader</name>
+  <summary>Download supported Yandex Books content</summary>
+
+  <developer id="io.github.gagoalaverdyan">
+    <name>Gago Alaverdyan</name>
+  </developer>
+
+  <description>
+    <p>
+      MateLoader is a small, focused desktop app for downloading books,
+      audiobooks, comicbooks, serials and series from Yandex Books. Paste a
+      link, choose where to save it, and download — with a live progress bar
+      and a detailed log when you need it.
+    </p>
+    <p>It follows the GNOME Human Interface Guidelines and ships with a CLI for
+      terminal-driven workflows.</p>
+  </description>
+
+  <launchable type="desktop-id">io.github.gagoalaverdyan.MateLoader.desktop</launchable>
+
+  <url type="homepage">https://github.com/gagoalaverdyan/MateLoader</url>
+  <url type="bugtracker">https://github.com/gagoalaverdyan/MateLoader/issues</url>
+
+  <categories>
+    <category>Utility</category>
+    <category>Network</category>
+  </categories>
+
+  <content_rating type="oars-1.1" />
+
+  <keywords>
+    <keyword>yandex</keyword>
+    <keyword>books</keyword>
+    <keyword>audiobook</keyword>
+    <keyword>ebook</keyword>
+    <keyword>download</keyword>
+  </keywords>
+
+  <releases>
+    <release version="0.2" date="2026-06-10">
+      <description>
+        <p>Rebuilt the desktop app in GTK4 and libadwaita: folder picker, real
+          progress bar, toast notifications, and paste-and-go URL detection.</p>
+      </description>
+    </release>
+  </releases>
+</component>

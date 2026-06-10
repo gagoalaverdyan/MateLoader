@@ -1,181 +1,139 @@
+<div align="center">
+
+<img src="data/icons/hicolor/scalable/apps/io.github.gagoalaverdyan.MateLoader.svg" width="120" alt="MateLoader icon" />
+
 # MateLoader
 
-MateLoader is a simple downloader for Yandex Books with two ways to use it:
+**A clean GTK4 desktop app and CLI for downloading Yandex Books content.**
 
-- a small desktop app
-- a CLI for terminal-driven workflows
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
+![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB)
+![GTK4 + libadwaita](https://img.shields.io/badge/GTK4-libadwaita-4A90D9)
 
-The desktop app is the primary mode. Install it, sign in once, paste an ID, and download.
+</div>
 
-Supported resource types:
+---
 
-- books
-- audiobooks
-- comicbooks
-- serials
-- series
+Paste a link, pick a folder, download. MateLoader supports **books, audiobooks,
+comicbooks, serials, and series** — with a live progress bar and an optional
+detailed log. The desktop app follows the GNOME Human Interface Guidelines; a
+CLI is included for terminal workflows.
+
+## Features
+
+- **Paste and go** — drop a `books.yandex.ru` link and the type is detected as you type.
+- **Choose your folder** — a native picker sets where files land (defaults to `~/Downloads/MateLoader`).
+- **Real progress** — a progress bar tracks multi-part downloads, with toasts for results.
+- **Sign in once** — your token is stored in the system keyring; the app stays locked until you authenticate.
 
 ## Install
 
-Core install, with the downloader and CLI commands:
+**1. System libraries** (GTK 4 + libadwaita are installed by your OS, not pip):
+
+| Platform | Command |
+| --- | --- |
+| Fedora | `sudo dnf install gtk4 libadwaita python3-gobject` |
+| Debian / Ubuntu | `sudo apt install gir1.2-gtk-4.0 gir1.2-adw-1 libadwaita-1-0 python3-gi python3-gi-cairo` |
+| Arch | `sudo pacman -S gtk4 libadwaita python-gobject` |
+| macOS (Homebrew) | `brew install gtk4 libadwaita pygobject3 adwaita-icon-theme` |
+
+**2. The app:**
 
 ```bash
-pip install .
+pip install '.[gui]'   # desktop app + auth
+pip install .          # CLI only
 ```
 
-That gives you:
+> On Debian/Ubuntu and Fedora, `python3-gi` / `python3-gobject` already provide
+> the PyGObject binding, so `pip install .` is enough.
 
-- `mateloader`
-
-Interactive authentication for the CLI:
-
-```bash
-pip install '.[auth]'
-```
-
-Desktop app and interactive authentication:
-
-```bash
-pip install '.[gui]'
-```
-
-Source install with the core CLI dependencies:
-
-```bash
-pip install -r requirements-cli.txt
-pip install --no-deps .
-```
-
-Developer tooling:
-
-```bash
-pip install '.[dev]'
-```
-
-## Use The Desktop App
-
-Start it:
+**3. Run it:**
 
 ```bash
 mateloader-gui
 ```
 
-If you installed only the core package, the GUI entrypoint will exit with a message telling you to install `mateloader[gui]`.
+## Using the app
 
-Step by step:
+1. **Authenticate** with your Yandex account (or paste a token override).
+2. **Paste** a Yandex Books URL — type and ID are detected automatically.
+3. **Pick** a download folder (optional).
+4. **Download.**
 
-1. Click `Authenticate`
-2. Sign in with your Yandex account
-3. Choose the resource type
-4. Paste the ID from the Yandex Books URL
-5. Leave `Token` empty to use the stored token, or paste a temporary override token
-6. For audiobooks, enable `Max quality` if needed
-7. Click `Download`
+Find the ID in any Yandex Books URL: `https://books.yandex.ru/<type>/<id>`.
 
-The app is intentionally minimal: one window, one form, and a plain log panel for progress.
-
-## Use The CLI
-
-If you prefer the terminal, use:
+<details>
+<summary><b>Command line</b></summary>
 
 ```bash
 mateloader <command> [options]
 ```
 
-Available commands:
-
 | Command | What it does |
 | --- | --- |
 | `auth` | Opens the login flow and saves your token |
 | `book` | Downloads a text book as `.epub` and `.fb2` |
-| `audiobook` | Downloads audiobook tracks |
+| `audiobook` | Downloads audiobook tracks (`--max-bitrate` for top quality) |
 | `comicbook` | Downloads a comicbook and renders a `.pdf` |
 | `serial` | Downloads a serialized book episode by episode |
 | `series` | Downloads every part in a series |
-
-Step by step:
-
-1. Run `mateloader auth` if you installed `mateloader[auth]`
-2. Copy the ID from a Yandex Books URL
-3. Run the matching command
-
-Examples:
 
 ```bash
 mateloader auth
 mateloader book <id>
 mateloader audiobook <id> --max-bitrate
-mateloader comicbook <id> --output-dir downloads
 MATELOADER_AUTH_TOKEN=... mateloader series <id>
 ```
 
-## Find The ID
+</details>
 
-Take it from the Yandex Books URL:
+<details>
+<summary><b>Authentication details</b></summary>
 
-```text
-https://books.yandex.ru/<type>/<id>
-```
+The token is read, in order, from `MATELOADER_AUTH_TOKEN`, `BOOKMATE_AUTH_TOKEN`,
+then the system keyring. You can also pass one directly with `--auth-token`. An
+environment variable alone is enough for CLI downloads without the optional auth
+extras. A legacy `token.txt`, if present, is migrated automatically.
 
-Examples:
+</details>
 
-- `https://books.yandex.ru/books/abcd1234`
-- `https://books.yandex.ru/audiobooks/abcd1234`
-- `https://books.yandex.ru/series/abcd1234`
+<details>
+<summary><b>Desktop integration (Linux)</b></summary>
 
-The `<type>` part tells you what to select in the GUI or which CLI command to run.
-
-## Authentication
-
-MateLoader stores your token in the system keyring.
-
-Downloads do not launch the browser automatically anymore. They read a token from:
-
-1. `MATELOADER_AUTH_TOKEN`
-2. `BOOKMATE_AUTH_TOKEN`
-3. the system keyring
-
-You can also pass a token directly:
+Install the bundled launcher, icon, and AppStream metadata:
 
 ```bash
-mateloader book <id> --auth-token <token>
+install -Dm644 data/io.github.gagoalaverdyan.MateLoader.desktop \
+  ~/.local/share/applications/io.github.gagoalaverdyan.MateLoader.desktop
+install -Dm644 data/icons/hicolor/scalable/apps/io.github.gagoalaverdyan.MateLoader.svg \
+  ~/.local/share/icons/hicolor/scalable/apps/io.github.gagoalaverdyan.MateLoader.svg
+install -Dm644 data/io.github.gagoalaverdyan.MateLoader.metainfo.xml \
+  ~/.local/share/metainfo/io.github.gagoalaverdyan.MateLoader.metainfo.xml
 ```
 
-Or use an environment variable:
+</details>
 
-```bash
-MATELOADER_AUTH_TOKEN=<token> mateloader book <id>
-```
+<details>
+<summary><b>Develop, build, and test</b></summary>
 
-If you do not want to install the optional auth dependencies, using an environment variable is enough for CLI downloads.
-
-If an old `token.txt` is present, MateLoader migrates it automatically and removes it.
-
-## Run From The Repo
-
-Without installing:
+Run from the repo without installing:
 
 ```bash
 PYTHONPATH=src python3 scripts/legacy_gui.py
 PYTHONPATH=src python3 scripts/legacy_cli.py book <id>
 ```
 
-## Build
-
-Create distributable packages:
+Build and test:
 
 ```bash
+pip install '.[dev]'
 python -m build
-```
-
-Validate them:
-
-```bash
-python -m twine check dist/*
-```
-
-Run the test suite:
-
-```bash
 PYTHONPATH=src python3 -m unittest discover -s tests
 ```
+
+</details>
+
+## License
+
+Released under the [GNU General Public License v3.0 or later](LICENSE).
+© 2026 [Gago Alaverdyan](https://github.com/gagoalaverdyan).

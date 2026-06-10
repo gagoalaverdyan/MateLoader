@@ -3,6 +3,7 @@ from __future__ import annotations
 import random
 
 APP_NAME = "MateLoader"
+APP_ID = "io.github.gagoalaverdyan.MateLoader"
 KEYRING_SERVICE = "MateLoader"
 KEYRING_USERNAME = "default"
 BASE_URL = "https://api.bookmate.yandex.net/api/v5"

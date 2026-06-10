@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="128" height="128" viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3584e4"/>
+      <stop offset="1" stop-color="#1c71d8"/>
+    </linearGradient>
+  </defs>
+  <rect x="8" y="8" width="112" height="112" rx="26" fill="url(#bg)"/>
+  <!-- open book -->
+  <g fill="#ffffff">
+    <path d="M30 40c11-5 23-5 34 1v44c-11-6-23-6-34-1z" opacity="0.95"/>
+    <path d="M98 40c-11-5-23-5-34 1v44c11-6 23-6 34-1z" opacity="0.8"/>
+  </g>
+  <!-- download arrow -->
+  <g fill="none" stroke="#1c71d8" stroke-width="7" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="92" cy="90" r="22" fill="#ffffff" stroke="none"/>
+    <path d="M92 80v20"/>
+    <path d="M83 92l9 9 9-9"/>
+  </g>
+</svg>
